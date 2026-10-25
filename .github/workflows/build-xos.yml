@@ -3,6 +3,10 @@ name: Build XOS ISO
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'xos-source.zip'
+      - '.github/workflows/build-xos.yml'
 
 permissions:
   contents: read
@@ -20,10 +24,39 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
 
     steps:
-      - name: Install tools
+      - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y ca-certificates unzip python3
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            git \
+            unzip \
+            xz-utils \
+            live-build \
+            debootstrap \
+            squashfs-tools \
+            xorriso \
+            isolinux \
+            syslinux-common \
+            grub-pc-bin \
+            grub-efi-amd64-bin \
+            grub-efi-ia32-bin \
+            dosfstools \
+            mtools \
+            debian-archive-keyring \
+            python3 \
+            python3-yaml \
+            python3-pil \
+            file \
+            rsync \
+            cpio \
+            gzip \
+            bzip2 \
+            zstd \
+            procps \
+            util-linux \
+            coreutils \
+            findutils
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,7 +68,7 @@ jobs:
 
           if [ ! -f build-xos.sh ]; then
             test -f xos-source.zip || {
-              echo "ERROR: xos-source.zip not found at repository root."
+              echo "ERROR: xos-source.zip not found in repository root."
               exit 1
             }
 
@@ -44,7 +77,7 @@ jobs:
 
             SCRIPT="$(find _xos_unpack -type f -name build-xos.sh -print -quit)"
             if [ -z "$SCRIPT" ]; then
-              echo "ERROR: build-xos.sh not found in ZIP."
+              echo "ERROR: build-xos.sh not found inside the ZIP."
               find _xos_unpack -maxdepth 5 -type f | head -150
               exit 1
             fi
@@ -57,22 +90,28 @@ jobs:
           test -f build-xos.sh
           test -f scripts/validate.sh
 
-      - name: Report Broadcom firmware package references
+      - name: Verify live-build installation
+        run: |
+          command -v lb
+          lb --version
+          command -v debootstrap
+          command -v xorriso
+
+      - name: Validate XOS source
         shell: bash
         run: |
-          set -euo pipefail
-          echo "Checking references to firmware-brcm80211."
-          grep -R -n 'firmware-brcm80211' . \
-            --exclude-dir=.git --exclude='*.zip' || true
+          chmod +x scripts/validate.sh
+          mkdir -p out
+          ./scripts/validate.sh --packages
 
-      - name: Build XOS
+      - name: Build XOS ISO
         shell: bash
         run: |
           set -o pipefail
-          chmod +x build-xos.sh scripts/validate.sh
+          chmod +x build-xos.sh
           ./build-xos.sh 2>&1 | tee build.log
 
-      - name: Upload logs
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -81,8 +120,9 @@ jobs:
             build.log
             out/
           if-no-files-found: warn
+          retention-days: 7
 
-      - name: Upload ISO
+      - name: Upload XOS ISO
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -91,4 +131,5 @@ jobs:
             *.iso
             out/*.iso
           if-no-files-found: warn
+          retention-days: 7
           
