@@ -8,6 +8,7 @@ permissions:
 
 jobs:
   extract:
+    name: Extract XOS source archive
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -15,52 +16,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate ZIP
+      - name: Find and extract XOS ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Repository location:"
-          pwd
+          echo "Searching for xos-source.zip..."
 
-          echo "Repository files:"
-          find . -maxdepth 4 -type f -not -path './.git/*' | sort | head -300
-
-          ZIP_PATH="$(find . -type f -iname 'xos-source.zip' -not -path './.git/*' -print -quit)"
+          ZIP_PATH="$(find . -type f -name 'xos-source.zip' -print -quit)"
 
           if [ -z "$ZIP_PATH" ]; then
-            echo "::error::Cannot find xos-source.zip in the checked-out repository."
+            echo "::error::xos-source.zip was not found in the repository."
+            echo "Files available in repository:"
+            find . -maxdepth 3 -type f | head -200
             exit 1
           fi
 
-          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
-          echo "Found: $ZIP_PATH"
+          echo "Found archive: $ZIP_PATH"
 
-      - name: Extract and verify
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p "$RUNNER_TEMP/xos-extracted"
+          mkdir -p extracted-xos
 
           unzip -t "$ZIP_PATH"
-          unzip -o "$ZIP_PATH" -d "$RUNNER_TEMP/xos-extracted"
+          unzip -o "$ZIP_PATH" -d extracted-xos
 
-          COUNT="$(find "$RUNNER_TEMP/xos-extracted" -type f | wc -l)"
-          echo "Extracted file count: $COUNT"
+          echo "Extraction complete."
+          echo "Extracted file listing:"
+          find extracted-xos -maxdepth 4 -type f | sort | head -500
 
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::error::The ZIP contains no files."
-            exit 1
-          fi
-
-          echo "First extracted files:"
-          find "$RUNNER_TEMP/xos-extracted" -type f | sort | head -100
-
-      - name: Upload extracted files
+      - name: Upload extracted XOS files
         uses: actions/upload-artifact@v4
         with:
           name: xos-extracted-source
-          path: ${{ runner.temp }}/xos-extracted/
+          path: extracted-xos/
           if-no-files-found: error
           retention-days: 7
