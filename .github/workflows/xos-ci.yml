@@ -1,0 +1,90 @@
+name: XOS Continuous Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "build-xos.sh"
+      - "scripts/**"
+      - "live/**"
+      - "config/**"
+      - ".github/workflows/xos-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xos-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    container:
+      image: debian:trixie
+      options: --privileged
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            ca-certificates unzip git \
+            live-build debootstrap squashfs-tools \
+            xorriso isolinux syslinux-common \
+            grub-pc-bin grub-efi-amd64-bin \
+            grub-efi-ia32-bin dosfstools mtools \
+            debian-archive-keyring python3 python3-yaml \
+            python3-pil file rsync cpio gzip bzip2 \
+            xz-utils zstd procps util-linux \
+            coreutils findutils libxml2-utils
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify required files
+        run: |
+          set -eu
+          test -f build-xos.sh
+          test -f scripts/validate.sh
+          chmod +x build-xos.sh scripts/validate.sh
+
+      - name: Validate XOS
+        run: |
+          set -o pipefail
+          ./scripts/validate.sh --packages 2>&1 | tee validation.log
+
+      - name: Build XOS
+        run: |
+          set -o pipefail
+          ./build-xos.sh 2>&1 | tee build.log
+
+      - name: Locate generated ISO
+        if: success()
+        run: |
+          find . -type f -iname '*.iso' -print
+          test -n "$(find . -type f -iname '*.iso' -print -quit)"
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xos-build-logs-${{ github.run_number }}
+          path: |
+            validation.log
+            build.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload ISO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xos-iso-${{ github.run_number }}
+          path: "**/*.iso"
+          if-no-files-found: error
+          retention-days: 7
