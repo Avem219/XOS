@@ -35,56 +35,70 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract and prepare XOS source
+      - name: Extract and prepare XOS
         shell: bash
         run: |
           set -euo pipefail
 
           if [ ! -f xos-source.zip ]; then
-            echo "ERROR: xos-source.zip is missing from the repository root."
-            find . -maxdepth 3 -type f -print
+            echo "ERROR: xos-source.zip is missing from repository root."
             exit 1
           fi
 
           mkdir -p _xos_unpack
           unzip -q -o xos-source.zip -d _xos_unpack
 
-          echo "=== Files found in archive ==="
-          find _xos_unpack -type f \
-            \( -name build-xos.sh \
-            -o -name validate.sh \
-            -o -name xos.list.chroot \
-            -o -name splash.png \) -print
-
           SCRIPT="$(find _xos_unpack -type f -name build-xos.sh -print -quit)"
           if [ -z "$SCRIPT" ]; then
-            echo "ERROR: build-xos.sh was not found inside xos-source.zip."
+            echo "ERROR: build-xos.sh was not found in the ZIP."
             find _xos_unpack -maxdepth 5 -type f -print | head -200
             exit 1
           fi
 
           ROOT="$(dirname "$SCRIPT")"
-
-          # Copy the extracted project into the working directory.
           cp -a "$ROOT"/. .
+          rm -rf _xos_unpack
 
-          if [ ! -f scripts/validate.sh ]; then
-            echo "ERROR: scripts/validate.sh was not found after extraction."
-            find . -maxdepth 5 -type f -print | head -200
-            exit 1
-          fi
+          test -f build-xos.sh
+          test -f scripts/validate.sh
 
-          # Remove only the unavailable package entry from the
-          # extracted XOS package list, if it exists.
           PACKAGE_LIST="live/package-lists/xos.list.chroot"
           if [ -f "$PACKAGE_LIST" ]; then
             sed -i '/^[[:space:]]*firmware-brcm80211[[:space:]]*$/d' "$PACKAGE_LIST"
-          else
-            echo "ERROR: Expected package list was not found."
-            exit 1
           fi
 
-          echo "XOS source extracted and prepared."
+          echo "=== Splash image candidates ==="
+          find . -type f -iname 'splash.png' -print
+
+          if [ ! -f config/xos-boot/splash.png ]; then
+            SOURCE_SPLASH=""
+
+            for candidate in \
+              live/bootloaders/splash.png \
+              config/bootloaders/splash.png \
+              live/config/xos-boot/splash.png; do
+              if [ -f "$candidate" ]; then
+                SOURCE_SPLASH="$candidate"
+                break
+              fi
+            done
+
+            if [ -z "$SOURCE_SPLASH" ]; then
+              SOURCE_SPLASH="$(find . -type f -iname 'splash.png' -print -quit)"
+            fi
+
+            if [ -z "$SOURCE_SPLASH" ]; then
+              echo "ERROR: No splash.png exists in the extracted XOS source."
+              exit 1
+            fi
+
+            mkdir -p config/xos-boot
+            cp "$SOURCE_SPLASH" config/xos-boot/splash.png
+            echo "Staged $SOURCE_SPLASH as config/xos-boot/splash.png"
+          fi
+
+          test -s config/xos-boot/splash.png
+          echo "XOS source and bootloader splash are ready."
 
       - name: Verify build tools
         run: |
@@ -107,7 +121,7 @@ jobs:
           set -o pipefail
           ./build-xos.sh 2>&1 | tee build.log
 
-      - name: Upload logs
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -118,7 +132,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload ISO
+      - name: Upload XOS ISO
         if: success()
         uses: actions/upload-artifact@v4
         with:
