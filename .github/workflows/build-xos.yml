@@ -1,100 +1,52 @@
-name: Build XOS ISO
+name: Extract XOS ZIP
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'xos-source.zip'
-      - 'live/**'
-      - 'scripts/**'
-      - 'build-xos.sh'
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  extract:
+    name: Extract XOS source archive
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
-    container:
-      image: debian:trixie
-      options: --privileged
-    env:
-      DEBIAN_FRONTEND: noninteractive
+    timeout-minutes: 10
+
     steps:
-      - name: Install bootstrap tools
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends ca-certificates git unzip python3 python3-yaml python3-pil libxml2-utils
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-
-      - name: Unpack xos-source.zip if the repository was uploaded as a zip
+      - name: Find and extract XOS ZIP
+        shell: bash
         run: |
-          if [ ! -f build-xos.sh ]; then
-            if [ -f xos-source.zip ]; then
-              unzip -q -o xos-source.zip
-              echo "Unpacked xos-source.zip"
-            else
-              echo "ERROR: neither build-xos.sh nor xos-source.zip found in the repository root." >&2
-              exit 1
-            fi
+          set -euo pipefail
+
+          echo "Searching for xos-source.zip..."
+
+          ZIP_PATH="$(find . -type f -name 'xos-source.zip' -print -quit)"
+
+          if [ -z "$ZIP_PATH" ]; then
+            echo "::error::xos-source.zip was not found in the repository."
+            echo "Files available in repository:"
+            find . -maxdepth 3 -type f | head -200
+            exit 1
           fi
-          ls -la
 
-      - name: Record environment
-        run: |
-          mkdir -p out
-          { cat /etc/os-release; uname -a; df -h /; nproc; free -m; } | tee out/environment.txt
+          echo "Found archive: $ZIP_PATH"
 
-      - name: Install ISO build dependencies
-        run: |
-          sed -i 's/^Components: main$/Components: main contrib non-free-firmware/' /etc/apt/sources.list.d/debian.sources || true
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            live-build debootstrap xorriso squashfs-tools mtools dosfstools \
-            grub-common grub-efi-amd64-bin grub-pc-bin syslinux syslinux-common isolinux \
-            qemu-system-x86 ovmf socat imagemagick sudo
-          dpkg-query -W live-build debootstrap xorriso grub-common syslinux qemu-system-x86 | tee out/tool-versions.txt
+          mkdir -p extracted-xos
 
-      - name: Validate repository (shell, XML, YAML, assets, package list, apt availability)
-        run: ./scripts/validate.sh --packages 2>&1 | tee out/validate.log
+          unzip -t "$ZIP_PATH"
+          unzip -o "$ZIP_PATH" -d extracted-xos
 
-      - name: Build ISO
-        run: ./build-xos.sh
+          echo "Extraction complete."
+          echo "Extracted file listing:"
+          find extracted-xos -maxdepth 4 -type f | sort | head -500
 
-      - name: Check ISO output
-        run: |
-          test -s out/XOS-Alpha-amd64.iso
-          ls -l out/XOS-Alpha-amd64.iso
-          cat out/XOS-Alpha-amd64.iso.sha256
-          cd out && sha256sum -c XOS-Alpha-amd64.iso.sha256
-          xorriso -indev XOS-Alpha-amd64.iso -report_el_torito as_mkisofs 2>&1 | head -30 | tee boot-info.txt
-
-      - name: Upload ISO
+      - name: Upload extracted XOS files
         uses: actions/upload-artifact@v4
         with:
-          name: XOS-Alpha-amd64-ISO
-          path: |
-            out/XOS-Alpha-amd64.iso
-            out/XOS-Alpha-amd64.iso.sha256
-          compression-level: 0
+          name: xos-extracted-source
+          path: extracted-xos/
           if-no-files-found: error
-
-      - name: QEMU UEFI boot smoke test (software emulation, may be slow; failure does not block the ISO)
-        continue-on-error: true
-        run: ./scripts/qemu-smoke.sh out/XOS-Alpha-amd64.iso 420 out/qemu 2>&1 | tee out/qemu-smoke.log
-
-      - name: Upload logs and boot screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: XOS-build-logs
-          path: |
-            out/*.log
-            out/*.txt
-            out/qemu/
-            build/chroot.packages.live
-            build/*.log
-          if-no-files-found: warn
+          retention-days: 7
