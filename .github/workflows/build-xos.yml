@@ -1,8 +1,14 @@
-
 name: Build XOS ISO
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'xos-source.zip'
+      - 'live/**'
+      - 'scripts/**'
+      - 'build-xos.sh'
 
 permissions:
   contents: read
@@ -11,135 +17,84 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
-
     container:
       image: debian:trixie
       options: --privileged
-
     env:
       DEBIAN_FRONTEND: noninteractive
-
     steps:
-      - name: Install build dependencies
+      - name: Install bootstrap tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends \
-            ca-certificates unzip live-build debootstrap \
-            squashfs-tools xorriso isolinux syslinux-common \
-            grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin \
-            dosfstools mtools debian-archive-keyring \
-            python3 python3-yaml python3-pil file rsync cpio \
-            gzip bzip2 xz-utils zstd procps util-linux \
-            coreutils findutils libxml2-utils
+          apt-get install -y --no-install-recommends ca-certificates git unzip python3 python3-yaml python3-pil libxml2-utils
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Extract and prepare XOS
-        shell: bash
+      - name: Unpack xos-source.zip if the repository was uploaded as a zip
         run: |
-          set -euo pipefail
-
-          if [ ! -f xos-source.zip ]; then
-            echo "ERROR: xos-source.zip is missing from repository root."
-            exit 1
-          fi
-
-          mkdir -p _xos_unpack
-          unzip -q -o xos-source.zip -d _xos_unpack
-
-          SCRIPT="$(find _xos_unpack -type f -name build-xos.sh -print -quit)"
-          if [ -z "$SCRIPT" ]; then
-            echo "ERROR: build-xos.sh was not found in the ZIP."
-            find _xos_unpack -maxdepth 5 -type f -print | head -200
-            exit 1
-          fi
-
-          ROOT="$(dirname "$SCRIPT")"
-          cp -a "$ROOT"/. .
-          rm -rf _xos_unpack
-
-          test -f build-xos.sh
-          test -f scripts/validate.sh
-
-          PACKAGE_LIST="live/package-lists/xos.list.chroot"
-          if [ -f "$PACKAGE_LIST" ]; then
-            sed -i '/^[[:space:]]*firmware-brcm80211[[:space:]]*$/d' "$PACKAGE_LIST"
-          fi
-
-          echo "=== Splash image candidates ==="
-          find . -type f -iname 'splash.png' -print
-
-          if [ ! -f config/xos-boot/splash.png ]; then
-            SOURCE_SPLASH=""
-
-            for candidate in \
-              live/bootloaders/splash.png \
-              config/bootloaders/splash.png \
-              live/config/xos-boot/splash.png; do
-              if [ -f "$candidate" ]; then
-                SOURCE_SPLASH="$candidate"
-                break
-              fi
-            done
-
-            if [ -z "$SOURCE_SPLASH" ]; then
-              SOURCE_SPLASH="$(find . -type f -iname 'splash.png' -print -quit)"
-            fi
-
-            if [ -z "$SOURCE_SPLASH" ]; then
-              echo "ERROR: No splash.png exists in the extracted XOS source."
+          if [ ! -f build-xos.sh ]; then
+            if [ -f xos-source.zip ]; then
+              unzip -q -o xos-source.zip
+              echo "Unpacked xos-source.zip"
+            else
+              echo "ERROR: neither build-xos.sh nor xos-source.zip found in the repository root." >&2
               exit 1
             fi
-
-            mkdir -p config/xos-boot
-            cp "$SOURCE_SPLASH" config/xos-boot/splash.png
-            echo "Staged $SOURCE_SPLASH as config/xos-boot/splash.png"
           fi
+          ls -la
 
-          test -s config/xos-boot/splash.png
-          echo "XOS source and bootloader splash are ready."
-
-      - name: Verify build tools
+      - name: Record environment
         run: |
-          command -v lb
-          command -v debootstrap
-          command -v xorriso
-          command -v xmllint
-
-      - name: Validate XOS source
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x scripts/validate.sh build-xos.sh
           mkdir -p out
-          ./scripts/validate.sh --packages
+          { cat /etc/os-release; uname -a; df -h /; nproc; free -m; } | tee out/environment.txt
 
-      - name: Build XOS ISO
-        shell: bash
+      - name: Install ISO build dependencies
         run: |
-          set -o pipefail
-          ./build-xos.sh 2>&1 | tee build.log
+          sed -i 's/^Components: main$/Components: main contrib non-free-firmware/' /etc/apt/sources.list.d/debian.sources || true
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            live-build debootstrap xorriso squashfs-tools mtools dosfstools \
+            grub-common grub-efi-amd64-bin grub-pc-bin syslinux syslinux-common isolinux \
+            qemu-system-x86 ovmf socat imagemagick sudo
+          dpkg-query -W live-build debootstrap xorriso grub-common syslinux qemu-system-x86 | tee out/tool-versions.txt
 
-      - name: Upload build logs
+      - name: Validate repository (shell, XML, YAML, assets, package list, apt availability)
+        run: ./scripts/validate.sh --packages 2>&1 | tee out/validate.log
+
+      - name: Build ISO
+        run: ./build-xos.sh
+
+      - name: Check ISO output
+        run: |
+          test -s out/XOS-Alpha-amd64.iso
+          ls -l out/XOS-Alpha-amd64.iso
+          cat out/XOS-Alpha-amd64.iso.sha256
+          cd out && sha256sum -c XOS-Alpha-amd64.iso.sha256
+          xorriso -indev XOS-Alpha-amd64.iso -report_el_torito as_mkisofs 2>&1 | head -30 | tee boot-info.txt
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOS-Alpha-amd64-ISO
+          path: |
+            out/XOS-Alpha-amd64.iso
+            out/XOS-Alpha-amd64.iso.sha256
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: QEMU UEFI boot smoke test (software emulation, may be slow; failure does not block the ISO)
+        continue-on-error: true
+        run: ./scripts/qemu-smoke.sh out/XOS-Alpha-amd64.iso 420 out/qemu 2>&1 | tee out/qemu-smoke.log
+
+      - name: Upload logs and boot screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: xos-build-logs
+          name: XOS-build-logs
           path: |
-            build.log
-            out/
+            out/*.log
+            out/*.txt
+            out/qemu/
+            build/chroot.packages.live
+            build/*.log
           if-no-files-found: warn
-          retention-days: 7
-
-      - name: Upload XOS ISO
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xos-iso
-          path: |
-            *.iso
-            out/*.iso
-          if-no-files-found: warn
-          retention-days: 7
-          
