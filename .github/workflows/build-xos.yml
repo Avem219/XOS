@@ -1,5 +1,5 @@
 
-name: Inspect XOS Source
+name: Build XOS ISO
 
 on:
   workflow_dispatch:
@@ -8,50 +8,87 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    container:
+      image: debian:trixie
+      options: --privileged
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
 
     steps:
-      - name: Checkout private repository
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates unzip python3
+
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Inspect and extract XOS ZIP
+      - name: Extract XOS source
         shell: bash
         run: |
-          set -eu
+          set -euo pipefail
 
-          echo "=== Repository root ==="
-          pwd
-          ls -la
+          if [ ! -f build-xos.sh ]; then
+            test -f xos-source.zip || {
+              echo "ERROR: xos-source.zip not found at repository root."
+              exit 1
+            }
 
-          if [ ! -f xos-source.zip ]; then
-            echo "ERROR: xos-source.zip is not in the repository root."
-            echo "Searching repository for ZIP files..."
-            find . -type f -iname '*.zip' -print
-            exit 1
+            mkdir -p _xos_unpack
+            unzip -q -o xos-source.zip -d _xos_unpack
+
+            SCRIPT="$(find _xos_unpack -type f -name build-xos.sh -print -quit)"
+            if [ -z "$SCRIPT" ]; then
+              echo "ERROR: build-xos.sh not found in ZIP."
+              find _xos_unpack -maxdepth 5 -type f | head -150
+              exit 1
+            fi
+
+            ROOT="$(dirname "$SCRIPT")"
+            cp -a "$ROOT"/. .
+            rm -rf _xos_unpack
           fi
 
-          echo "=== ZIP directory structure ==="
-          unzip -Z1 xos-source.zip | head -200
+          test -f build-xos.sh
+          test -f scripts/validate.sh
 
-          echo "=== Extracting archive ==="
-          mkdir -p _xos_inspection
-          unzip -q -o xos-source.zip -d _xos_inspection
+      - name: Report Broadcom firmware package references
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Checking references to firmware-brcm80211."
+          grep -R -n 'firmware-brcm80211' . \
+            --exclude-dir=.git --exclude='*.zip' || true
 
-          echo "=== Build and validation files ==="
-          find _xos_inspection -type f \
-            \( -name 'build-xos.sh' \
-            -o -name 'validate.sh' \
-            -o -name '0100-xos-bootloader.hook.binary' \
-            -o -name 'splash.png' \) -print
+      - name: Build XOS
+        shell: bash
+        run: |
+          set -o pipefail
+          chmod +x build-xos.sh scripts/validate.sh
+          ./build-xos.sh 2>&1 | tee build.log
 
-          echo "=== Top-level extracted folders ==="
-          find _xos_inspection -maxdepth 3 -type d -print | head -100
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xos-build-logs
+          path: |
+            build.log
+            out/
+          if-no-files-found: warn
 
-          echo "=== Package reference ==="
-          grep -R -n 'firmware-brcm80211' _xos_inspection \
-            --include='*.sh' --include='*.yml' --include='*.yaml' \
-            --include='*.list' 2>/dev/null || true
-
-          echo "Inspection complete. No ISO build attempted."
+      - name: Upload ISO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xos-iso
+          path: |
+            *.iso
+            out/*.iso
+          if-no-files-found: warn
           
