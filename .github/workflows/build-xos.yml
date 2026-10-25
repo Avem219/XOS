@@ -3,10 +3,6 @@ name: Build XOS ISO
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'xos-source.zip'
-      - '.github/workflows/build-xos.yml'
 
 permissions:
   contents: read
@@ -28,79 +24,80 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates \
-            git \
-            unzip \
-            xz-utils \
-            live-build \
-            debootstrap \
-            squashfs-tools \
-            xorriso \
-            isolinux \
-            syslinux-common \
-            grub-pc-bin \
-            grub-efi-amd64-bin \
-            grub-efi-ia32-bin \
-            dosfstools \
-            mtools \
-            debian-archive-keyring \
-            python3 \
-            python3-yaml \
-            python3-pil \
-            file \
-            rsync \
-            cpio \
-            gzip \
-            bzip2 \
-            zstd \
-            procps \
-            util-linux \
-            coreutils \
-            findutils
+            ca-certificates unzip live-build debootstrap \
+            squashfs-tools xorriso isolinux syslinux-common \
+            grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin \
+            dosfstools mtools debian-archive-keyring \
+            python3 python3-yaml python3-pil file rsync cpio \
+            gzip bzip2 xz-utils zstd procps util-linux \
+            coreutils findutils libxml2-utils
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract XOS source
+      - name: Extract and prepare XOS source
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f build-xos.sh ]; then
-            test -f xos-source.zip || {
-              echo "ERROR: xos-source.zip not found in repository root."
-              exit 1
-            }
-
-            mkdir -p _xos_unpack
-            unzip -q -o xos-source.zip -d _xos_unpack
-
-            SCRIPT="$(find _xos_unpack -type f -name build-xos.sh -print -quit)"
-            if [ -z "$SCRIPT" ]; then
-              echo "ERROR: build-xos.sh not found inside the ZIP."
-              find _xos_unpack -maxdepth 5 -type f | head -150
-              exit 1
-            fi
-
-            ROOT="$(dirname "$SCRIPT")"
-            cp -a "$ROOT"/. .
-            rm -rf _xos_unpack
+          if [ ! -f xos-source.zip ]; then
+            echo "ERROR: xos-source.zip is missing from the repository root."
+            find . -maxdepth 3 -type f -print
+            exit 1
           fi
 
-          test -f build-xos.sh
-          test -f scripts/validate.sh
+          mkdir -p _xos_unpack
+          unzip -q -o xos-source.zip -d _xos_unpack
 
-      - name: Verify live-build installation
+          echo "=== Files found in archive ==="
+          find _xos_unpack -type f \
+            \( -name build-xos.sh \
+            -o -name validate.sh \
+            -o -name xos.list.chroot \
+            -o -name splash.png \) -print
+
+          SCRIPT="$(find _xos_unpack -type f -name build-xos.sh -print -quit)"
+          if [ -z "$SCRIPT" ]; then
+            echo "ERROR: build-xos.sh was not found inside xos-source.zip."
+            find _xos_unpack -maxdepth 5 -type f -print | head -200
+            exit 1
+          fi
+
+          ROOT="$(dirname "$SCRIPT")"
+
+          # Copy the extracted project into the working directory.
+          cp -a "$ROOT"/. .
+
+          if [ ! -f scripts/validate.sh ]; then
+            echo "ERROR: scripts/validate.sh was not found after extraction."
+            find . -maxdepth 5 -type f -print | head -200
+            exit 1
+          fi
+
+          # Remove only the unavailable package entry from the
+          # extracted XOS package list, if it exists.
+          PACKAGE_LIST="live/package-lists/xos.list.chroot"
+          if [ -f "$PACKAGE_LIST" ]; then
+            sed -i '/^[[:space:]]*firmware-brcm80211[[:space:]]*$/d' "$PACKAGE_LIST"
+          else
+            echo "ERROR: Expected package list was not found."
+            exit 1
+          fi
+
+          echo "XOS source extracted and prepared."
+
+      - name: Verify build tools
         run: |
           command -v lb
-          lb --version
           command -v debootstrap
           command -v xorriso
+          command -v xmllint
 
       - name: Validate XOS source
         shell: bash
         run: |
-          chmod +x scripts/validate.sh
+          set -euo pipefail
+          chmod +x scripts/validate.sh build-xos.sh
           mkdir -p out
           ./scripts/validate.sh --packages
 
@@ -108,10 +105,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          chmod +x build-xos.sh
           ./build-xos.sh 2>&1 | tee build.log
 
-      - name: Upload build logs
+      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -122,7 +118,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload XOS ISO
+      - name: Upload ISO
         if: success()
         uses: actions/upload-artifact@v4
         with:
