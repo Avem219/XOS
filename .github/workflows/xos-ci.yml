@@ -18,7 +18,7 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Install extraction tools
+      - name: Install archive tools
         shell: bash
         run: |
           set -euo pipefail
@@ -41,22 +41,19 @@ jobs:
           echo "Checking archive: $ZIP_PATH"
           unzip -t "$ZIP_PATH"
 
-          # Extract source files but preserve workflow definitions.
+          # Keep workflow definitions unchanged.
           unzip -o "$ZIP_PATH" -d . \
             -x '.github/workflows/*' \
                '.github/workflows/**'
 
-          echo "Checking extracted build script..."
-          find . -type f -name 'build-xos.sh' \
-            -not -path './.git/*' -print
-
           if [[ ! -f build-xos.sh ]]; then
-            echo "::error::build-xos.sh is not in the repository root."
-            echo "The archive may contain an enclosing directory."
+            echo "::error::build-xos.sh must be at repository root."
+            find . -type f -name 'build-xos.sh' \
+              -not -path './.git/*' -print
             exit 1
           fi
 
-          echo "XOS source extraction completed."
+          echo "XOS source extracted."
 
       - name: Commit and push extracted source
         shell: bash
@@ -81,7 +78,41 @@ jobs:
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
-      - name: Check XOS build prerequisites
+      - name: Install XOS ISO build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+
+          sudo env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y \
+              live-build \
+              debootstrap \
+              squashfs-tools \
+              xorriso \
+              isolinux \
+              syslinux-common \
+              grub-pc-bin \
+              grub-efi-amd64-bin \
+              grub-efi-ia32-bin \
+              dosfstools \
+              mtools \
+              xz-utils \
+              rsync \
+              ca-certificates \
+              curl \
+              git \
+              file \
+              cpio \
+              gdisk
+
+          echo "Checking build tools..."
+          lb --version
+          debootstrap --version
+          xorriso -version
+
+      - name: Validate XOS source
         shell: bash
         run: |
           set -euo pipefail
@@ -90,19 +121,20 @@ jobs:
           test -d live
           test -d scripts
 
-          echo "Build script and expected source directories found."
-          bash --version | head -n 1
+          if [[ -f scripts/validate.sh ]]; then
+            bash scripts/validate.sh
+          else
+            echo "No scripts/validate.sh found; basic checks passed."
+          fi
 
       - name: Build XOS bootable ISO
         shell: bash
         run: |
           set -euo pipefail
 
-          # The build may need root privileges for live-build
-          # and system package operations.
           sudo bash ./build-xos.sh
 
-      - name: Find and prepare the ISO artifact
+      - name: Locate and verify generated ISO
         shell: bash
         run: |
           set -euo pipefail
@@ -115,21 +147,22 @@ jobs:
             -print -quit)"
 
           if [[ -z "$ISO_PATH" ]]; then
-            echo "::error::The build finished without producing an ISO."
-            echo "Inspect the build logs to identify the failure."
+            echo "::error::No ISO was generated."
+            echo "Review the build step logs."
             exit 1
           fi
 
-          echo "ISO found: $ISO_PATH"
+          echo "Generated ISO: $ISO_PATH"
+          test -s "$ISO_PATH"
 
           cp "$ISO_PATH" out/iso/XOS-Alpha-amd64.iso
 
-          echo "ISO file details:"
-          ls -lh out/iso/XOS-Alpha-amd64.iso
           sha256sum out/iso/XOS-Alpha-amd64.iso \
             | tee out/iso/SHA256SUMS.txt
 
-      - name: Upload bootable ISO
+          ls -lh out/iso/
+
+      - name: Upload XOS ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: XOS-Alpha-amd64-ISO
