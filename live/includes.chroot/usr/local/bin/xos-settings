@@ -1,0 +1,12 @@
+#!/bin/sh
+# XOS settings hub: opens the real configuration tools; nothing here is simulated.
+choice=$(printf 'Display\nNetwork\nSound\nAppearance\nWindows (Openbox)\nDisks\nTask Manager\n' | rofi -dmenu -i -p "Settings")
+case "$choice" in
+  Display) exec lxrandr ;;
+  Network) exec nm-connection-editor ;;
+  Sound) exec pavucontrol ;;
+  Appearance) exec lxappearance ;;
+  "Windows (Openbox)") exec obconf ;;
+  Disks) exec gparted ;;
+  "Task Manager") exec xfce4-taskmanager ;;
+esac

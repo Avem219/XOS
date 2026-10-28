@@ -1,0 +1,72 @@
+# XOS Alpha package list (Debian trixie, amd64). Keep one package per line.
+# Desktop session
+xserver-xorg
+xinit
+lightdm
+lightdm-gtk-greeter
+dbus-x11
+libgl1-mesa-dri
+openbox
+obconf
+tint2
+rofi
+pcmanfm
+feh
+picom
+dunst
+x11-xserver-utils
+xdg-user-dirs
+xdg-utils
+lxappearance
+lxrandr
+lxpolkit
+polkitd
+pkexec
+udisks2
+gvfs
+gvfs-backends
+fonts-inter
+fonts-dejavu-core
+adwaita-icon-theme
+gnome-themes-extra
+# Boot splash
+plymouth
+plymouth-themes
+# Networking
+network-manager
+network-manager-gnome
+nm-connection-editor
+wpasupplicant
+# Audio
+pipewire
+pipewire-pulse
+pipewire-alsa
+wireplumber
+alsa-utils
+pavucontrol
+pasystray
+# Hardware support and firmware (non-free-firmware archive area)
+firmware-linux-free
+firmware-linux-nonfree
+firmware-misc-nonfree
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+firmware-brcm80211
+brightnessctl
+bluez
+blueman
+xserver-xorg-input-libinput
+mesa-utils
+# Applications
+firefox-esr
+mousepad
+xarchiver
+unzip
+zip
+p7zip-full
+evince
+xfce4-terminal
+xfce4-taskmanager
+scrot
+gparted

@@ -1,0 +1,13 @@
+#!/bin/sh
+# XOS session/power menu. Uses systemd/logind; runs as the normal user (no root needed on a local session).
+choice="$1"
+if [ -z "$choice" ]; then
+  choice=$(printf 'Lock\nLog out\nRestart\nShut down\n' | rofi -dmenu -i -p "Power" | tr 'A-Z ' 'a-z-')
+fi
+case "$choice" in
+  lock|Lock) command -v xdg-screensaver >/dev/null && xdg-screensaver lock || notify-send "XOS" "Screen lock is not available in this session" ;;
+  log-out|logout) openbox --exit ;;
+  restart|reboot) systemctl reboot ;;
+  shut-down|poweroff) systemctl poweroff ;;
+  *) exit 0 ;;
+esac

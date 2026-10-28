@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=XOS
+Description=XOS Alpha boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/xos
+ScriptFile=/usr/share/plymouth/themes/xos/xos.script

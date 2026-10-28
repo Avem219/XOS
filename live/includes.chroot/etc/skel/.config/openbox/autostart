@@ -1,0 +1,9 @@
+# XOS session autostart (runs as the normal live user, never root)
+feh --bg-fill /usr/share/backgrounds/xos/xos-wallpaper.png &
+lxpolkit &
+picom --backend xrender --no-fading-openclose &
+dunst &
+tint2 &
+nm-applet &
+pasystray &
+blueman-applet &

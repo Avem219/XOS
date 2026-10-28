@@ -1,0 +1,4 @@
+#!/bin/sh
+# Select the XOS Plymouth theme and rebuild the initramfs so it is used at boot.
+set -e
+plymouth-set-default-theme -R xos

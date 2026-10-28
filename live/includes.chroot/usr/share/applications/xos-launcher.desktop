@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=XOS Launcher
+Comment=Search and start applications
+Exec=rofi -show drun
+Icon=/usr/share/plymouth/themes/xos/logo.png
+Terminal=false
+Categories=System;

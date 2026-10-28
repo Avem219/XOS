@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Power and Session
+Comment=Log out, restart or shut down
+Exec=xos-power
+Icon=system-shutdown
+Terminal=false
+Categories=System;

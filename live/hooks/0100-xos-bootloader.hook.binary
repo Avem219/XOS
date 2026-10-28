@@ -1,0 +1,114 @@
+#!/bin/sh
+# Brand the boot menus. Runs from the live-build work directory after the bootloaders were populated.
+set -eu
+SRC=config/xos-boot
+APPEND="boot=live components quiet splash username=xos hostname=xos locales=en_US.UTF-8 keyboard-layouts=us"
+
+[ -f "$SRC/splash.png" ] || { echo "XOS hook: missing $SRC/splash.png" >&2; exit 1; }
+
+# ---- GRUB (UEFI and GRUB-based boots) ----
+T=binary/boot/grub/themes/xos
+mkdir -p "$T"
+cp "$SRC/splash.png" "$T/background.png"
+cp "$SRC/select_c.png" "$T/select_c.png"
+FONT=""
+for f in /usr/share/grub/unicode.pf2 /usr/share/grub2/unicode.pf2; do [ -f "$f" ] && FONT="$f" && break; done
+if [ -n "$FONT" ]; then cp "$FONT" "$T/unicode.pf2"; fi
+
+cat > "$T/theme.txt" <<'THEME'
+desktop-color: "#F2F3F5"
+desktop-image: "background.png"
+title-text: ""
+message-font: "Unifont Regular 16"
+terminal-font: "Unifont Regular 16"
++ boot_menu {
+  left = 6%
+  top = 34%
+  width = 46%
+  height = 46%
+  item_font = "Unifont Regular 16"
+  item_color = "#252932"
+  selected_item_font = "Unifont Regular 16"
+  selected_item_color = "#FFFFFF"
+  item_height = 34
+  item_padding = 8
+  item_spacing = 6
+  selected_item_pixmap_style = "select_*.png"
+  scrollbar = false
+}
++ label {
+  left = 6%
+  top = 86%
+  width = 60%
+  align = "left"
+  font = "Unifont Regular 16"
+  color = "#65758D"
+  text = "XOS Alpha   Up/Down: choose   Enter: boot   E: edit   C: command line"
+}
+THEME
+
+cat > binary/boot/grub/grub.cfg <<GRUBCFG
+set default=0
+set timeout=10
+insmod part_gpt
+insmod part_msdos
+insmod iso9660
+insmod gzio
+search --no-floppy --set=root --file /live/vmlinuz
+
+if loadfont /boot/grub/themes/xos/unicode.pf2 ; then
+  set gfxmode=auto
+  insmod efi_gop
+  insmod efi_uga
+  insmod all_video
+  insmod gfxterm
+  insmod png
+  terminal_output gfxterm
+  set theme=/boot/grub/themes/xos/theme.txt
+  export theme
+fi
+
+menuentry "XOS Alpha - Live session (normal boot)" {
+  linux /live/vmlinuz $APPEND
+  initrd /live/initrd.img
+}
+menuentry "XOS Alpha - Troubleshooting: verbose boot (no splash)" {
+  linux /live/vmlinuz boot=live components username=xos hostname=xos locales=en_US.UTF-8 keyboard-layouts=us nosplash
+  initrd /live/initrd.img
+}
+menuentry "XOS Alpha - Troubleshooting: safe graphics (nomodeset)" {
+  linux /live/vmlinuz $APPEND nomodeset
+  initrd /live/initrd.img
+}
+menuentry "XOS Alpha - Load into RAM (toram), USB can be removed" {
+  linux /live/vmlinuz $APPEND toram
+  initrd /live/initrd.img
+}
+if [ "\$grub_platform" = "efi" ]; then
+  menuentry "UEFI firmware settings" {
+    fwsetup
+  }
+fi
+GRUBCFG
+
+# ---- syslinux / isolinux (legacy BIOS) ----
+if [ -d binary/isolinux ]; then
+  cp "$SRC/splash.png" binary/isolinux/splash.png
+  cat > binary/isolinux/stdmenu.cfg <<'STD'
+menu background splash.png
+menu title XOS Alpha
+menu color title * #ff252932 *
+menu color border * #00000000 #00000000 none
+menu color sel * #ffffffff #ffd9233f *
+menu color hotsel 1;7;37;40 #ffffffff #ffd9233f *
+menu color unsel * #ff252932 #00000000 *
+menu color hotkey 1;37;40 #ffd9233f #00000000 *
+menu color tabmsg * #ff65758d #00000000 *
+menu color help 37;40 #ff252932 #00000000 *
+menu vshift 8
+menu rows 10
+menu helpmsgrow 15
+menu tabmsgrow 13
+STD
+fi
+echo "XOS bootloader hook finished"

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Live-image housekeeping: no telemetry, NetworkManager owns networking, LightDM is the display manager.
+set -e
+systemctl enable NetworkManager.service || true
+systemctl enable lightdm.service || true
+systemctl enable bluetooth.service || true
+ln -sf /usr/share/backgrounds/xos/xos-wallpaper.png /usr/share/images/desktop-base/default 2>/dev/null || true
+# Remove any distribution release banner that still says Debian in the login greeter hostname area
+echo "XOS Alpha (Debian-based live system)" > /etc/issue.net

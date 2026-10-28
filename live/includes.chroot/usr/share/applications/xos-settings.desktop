@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=XOS Settings
+Comment=Display, network, sound and appearance settings
+Exec=xos-settings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;
