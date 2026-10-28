@@ -1,5 +1,5 @@
 
-name: Extract XOS ZIP to Repository Root
+name: Extract, Build and Publish XOS ISO
 
 on:
   workflow_dispatch:
@@ -8,22 +8,24 @@ permissions:
   contents: write
 
 jobs:
-  extract:
+  extract-commit-build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 360
 
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
         with:
           persist-credentials: true
 
-      - name: Install unzip
+      - name: Install extraction tools
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      - name: Extract archive into repository root
+      - name: Extract XOS source into repository root
         shell: bash
         run: |
           set -euo pipefail
@@ -32,32 +34,31 @@ jobs:
             -not -path './.git/*' -print -quit)"
 
           if [[ -z "$ZIP_PATH" ]]; then
-            echo "::error::xos-source.zip not found."
+            echo "::error::xos-source.zip was not found."
             exit 1
           fi
 
-          echo "Archive: $ZIP_PATH"
+          echo "Checking archive: $ZIP_PATH"
           unzip -t "$ZIP_PATH"
 
-          # Extract into the repository root.
-          # Existing files may be overwritten by matching archive paths.
-          unzip -o "$ZIP_PATH" -d .
+          # Extract source files but preserve workflow definitions.
+          unzip -o "$ZIP_PATH" -d . \
+            -x '.github/workflows/*' \
+               '.github/workflows/**'
 
-          echo "Root files after extraction:"
-          ls -la
-
-          echo "Build script locations:"
+          echo "Checking extracted build script..."
           find . -type f -name 'build-xos.sh' \
             -not -path './.git/*' -print
 
           if [[ ! -f build-xos.sh ]]; then
-            echo "::error::build-xos.sh is not at the repository root."
-            echo "The ZIP may contain an enclosing directory."
-            echo "Inspect the file locations above before changing paths."
+            echo "::error::build-xos.sh is not in the repository root."
+            echo "The archive may contain an enclosing directory."
             exit 1
           fi
 
-      - name: Commit extracted files to repository
+          echo "XOS source extraction completed."
+
+      - name: Commit and push extracted source
         shell: bash
         run: |
           set -euo pipefail
@@ -66,14 +67,72 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Do not add the archive or Git metadata.
-          git add -A -- . ':!.git' ':!xos-source.zip'
+          git add -A -- . \
+            ':!.git' \
+            ':!xos-source.zip' \
+            ':!.github/workflows' \
+            ':!*.iso' \
+            ':!**/*.iso'
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+            echo "No source changes to commit."
+          else
+            git commit -m "Extract XOS source into repository root"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
-          git commit -m "Extract XOS source into repository root"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Check XOS build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
 
+          test -f build-xos.sh
+          test -d live
+          test -d scripts
+
+          echo "Build script and expected source directories found."
+          bash --version | head -n 1
+
+      - name: Build XOS bootable ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The build may need root privileges for live-build
+          # and system package operations.
+          sudo bash ./build-xos.sh
+
+      - name: Find and prepare the ISO artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p out/iso
+
+          ISO_PATH="$(find . -type f -iname '*.iso' \
+            -not -path './.git/*' \
+            -not -path './out/iso/*' \
+            -print -quit)"
+
+          if [[ -z "$ISO_PATH" ]]; then
+            echo "::error::The build finished without producing an ISO."
+            echo "Inspect the build logs to identify the failure."
+            exit 1
+          fi
+
+          echo "ISO found: $ISO_PATH"
+
+          cp "$ISO_PATH" out/iso/XOS-Alpha-amd64.iso
+
+          echo "ISO file details:"
+          ls -lh out/iso/XOS-Alpha-amd64.iso
+          sha256sum out/iso/XOS-Alpha-amd64.iso \
+            | tee out/iso/SHA256SUMS.txt
+
+      - name: Upload bootable ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOS-Alpha-amd64-ISO
+          path: out/iso/
+          if-no-files-found: error
+          retention-days: 14
