@@ -1,4 +1,4 @@
-```yaml
+
 name: Extract XOS ZIP to Repository Root
 
 on:
@@ -76,4 +76,4 @@ jobs:
 
           git commit -m "Extract XOS source into repository root"
           git push origin "HEAD:${GITHUB_REF_NAME}"
-```
+
