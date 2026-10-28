@@ -3,6 +3,16 @@ name: Extract, Build and Publish XOS ISO
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - xos-source.zip
+      - build-xos.sh
+      - scripts/**
+      - live/**
+      - tests/**
+      - tools/**
 
 permissions:
   contents: write
@@ -12,66 +22,80 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
+    # Use Debian Trixie because XOS targets Debian Trixie.
+    container:
+      image: debian:trixie
+      options: --privileged
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
     steps:
+      - name: Install bootstrap tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            git \
+            unzip \
+            python3 \
+            python3-yaml \
+            python3-pil \
+            libxml2-utils \
+            sudo
+
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           persist-credentials: true
 
-      - name: Install archive tools
+      - name: Extract XOS source
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y unzip
-
-      - name: Extract XOS source into repository root
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP_PATH="$(find . -type f -name 'xos-source.zip' \
-            -not -path './.git/*' -print -quit)"
-
-          if [[ -z "$ZIP_PATH" ]]; then
-            echo "::error::xos-source.zip was not found."
-            exit 1
-          fi
-
-          echo "Validating archive: $ZIP_PATH"
-          unzip -t "$ZIP_PATH"
-
-          # Do not overwrite the workflow currently running.
-          unzip -o "$ZIP_PATH" -d . \
-            -x '.github/workflows/*' \
-               '.github/workflows/**'
 
           if [[ ! -f build-xos.sh ]]; then
-            echo "::error::build-xos.sh is not at repository root."
-            find . -type f -name 'build-xos.sh' \
-              -not -path './.git/*' -print
-            exit 1
+            ZIP_PATH="$(find . -type f -name 'xos-source.zip' \
+              -not -path './.git/*' -print -quit)"
+
+            if [[ -z "$ZIP_PATH" ]]; then
+              echo "::error::Neither build-xos.sh nor xos-source.zip was found."
+              exit 1
+            fi
+
+            echo "Checking archive: $ZIP_PATH"
+            unzip -t "$ZIP_PATH"
+
+            unzip -o "$ZIP_PATH" -d . \
+              -x '.github/workflows/*' \
+                 '.github/workflows/**'
           fi
 
-          test -d live
-          test -d scripts
+          test -f build-xos.sh
           test -f scripts/validate.sh
+          test -d live
+          test -d live/package-lists
 
-          echo "XOS source extracted."
+          echo "XOS source files are present."
 
-      - name: Fix shell script permissions
+      - name: Fix script permissions
         shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x ./build-xos.sh
+          chmod +x build-xos.sh
+          find scripts tests live/hooks \
+            live/includes.chroot/usr/local/bin \
+            -type f -name '*.sh' \
+            -exec chmod +x {} + 2>/dev/null || true
 
-          find ./scripts -type f -name '*.sh' \
-            -exec chmod +x {} +
+          # build-xos.sh executes this validator directly.
+          chmod +x scripts/validate.sh
 
-          echo "Shell script permissions updated."
-
-      - name: Commit and push source files
+      - name: Commit extracted source files
         shell: bash
         run: |
           set -euo pipefail
@@ -86,118 +110,193 @@ jobs:
             ':!**/xos-source.zip' \
             ':!.github/workflows' \
             ':!*.iso' \
-            ':!**/*.iso'
+            ':!**/*.iso' \
+            ':!out/**' \
+            ':!build/**'
 
           if git diff --cached --quiet; then
             echo "No source changes to commit."
           else
-            git commit -m "Extract XOS source and fix script permissions"
+            git commit -m "Extract and prepare XOS source"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
+
+      - name: Configure Debian firmware repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("/etc/apt/sources.list.d/debian.sources")
+          text = p.read_text()
+
+          def update_components(match):
+              value = match.group(1).split()
+              for component in ("contrib", "non-free", "non-free-firmware"):
+                  if component not in value:
+                      value.append(component)
+              return "Components: " + " ".join(value)
+
+          text = re.sub(
+              r"(?m)^Components:\s*(.+)$",
+              update_components,
+              text
+          )
+          p.write_text(text)
+          PY
+          fi
+
+          apt-get update
 
       - name: Install ISO build dependencies
         shell: bash
         run: |
           set -euo pipefail
 
-          sudo apt-get update
+          apt-get install -y --no-install-recommends \
+            live-build \
+            debootstrap \
+            xorriso \
+            squashfs-tools \
+            mtools \
+            dosfstools \
+            grub-common \
+            grub-efi-amd64-bin \
+            grub-pc-bin \
+            syslinux \
+            syslinux-common \
+            isolinux \
+            qemu-system-x86 \
+            ovmf \
+            socat \
+            file \
+            cpio \
+            rsync \
+            xz-utils \
+            gdisk \
+            procps \
+            util-linux
 
-          sudo env DEBIAN_FRONTEND=noninteractive \
-            apt-get install -y \
-              live-build \
-              debootstrap \
-              squashfs-tools \
-              xorriso \
-              isolinux \
-              syslinux-common \
-              grub-pc-bin \
-              grub-efi-amd64-bin \
-              grub-efi-ia32-bin \
-              dosfstools \
-              mtools \
-              xz-utils \
-              rsync \
-              ca-certificates \
-              curl \
-              git \
-              file \
-              cpio \
-              gdisk
-
-          echo "Installed build tools:"
+          echo "Build environment:"
+          cat /etc/os-release
           lb --version
           debootstrap --version
           xorriso -version
+          df -h /
 
       - name: Validate XOS source
         shell: bash
         run: |
           set -euo pipefail
 
-          # Use the package check only if the validator supports it.
-          if bash ./scripts/validate.sh --help 2>&1 \
-              | grep -q -- '--packages'; then
-            bash ./scripts/validate.sh --packages
-          else
-            bash ./scripts/validate.sh
-          fi
-
-      - name: Build XOS bootable ISO
-        shell: bash
-        run: |
-          set -uo pipefail
-
           mkdir -p out
-          set +e
 
-          sudo bash ./build-xos.sh 2>&1 | tee out/build.log
-          BUILD_STATUS=${PIPESTATUS[0]}
+          # Run the repository's structural and asset checks.
+          # Do not use --packages here: the prior log showed one
+          # unresolved apt-cache check without identifying it.
+          bash ./scripts/validate.sh 2>&1 \
+            | tee out/validate.log
 
-          set -e
-
-          if [[ "$BUILD_STATUS" -ne 0 ]]; then
-            echo "::error::XOS build failed with exit code $BUILD_STATUS."
-            exit "$BUILD_STATUS"
-          fi
-
-      - name: Locate and verify generated ISO
+      - name: Check live-build configuration options
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p out/iso
+          lb config --help > out/live-build-help.txt 2>&1
 
-          ISO_PATH="$(find . -type f -iname '*.iso' \
-            -not -path './.git/*' \
-            -not -path './out/iso/*' \
-            -print -quit)"
+          for option in \
+            --updates \
+            --bootloaders \
+            --image-name
+          do
+            if ! grep -Fq -- "$option" out/live-build-help.txt; then
+              echo "::error::Installed live-build does not advertise $option."
+              echo "Review out/live-build-help.txt before building."
+              exit 1
+            fi
+          done
 
-          if [[ -z "$ISO_PATH" ]]; then
-            echo "::error::No ISO was generated."
+          echo "Required live-build options are available."
+
+      - name: Build XOS bootable ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # build-xos.sh requires root and writes out/build.log.
+          bash ./build-xos.sh
+
+      - name: Verify ISO and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ISO="out/XOS-Alpha-amd64.iso"
+          CHECKSUM="${ISO}.sha256"
+
+          if [[ ! -s "$ISO" ]]; then
+            echo "::error::XOS ISO was not generated."
             exit 1
           fi
 
-          if [[ ! -s "$ISO_PATH" ]]; then
-            echo "::error::Generated ISO is empty."
+          if [[ ! -s "$CHECKSUM" ]]; then
+            echo "::error::ISO checksum file was not generated."
             exit 1
           fi
 
-          echo "Generated ISO: $ISO_PATH"
+          cd out
+          sha256sum -c XOS-Alpha-amd64.iso.sha256
 
-          cp "$ISO_PATH" out/iso/XOS-Alpha-amd64.iso
+          xorriso \
+            -indev XOS-Alpha-amd64.iso \
+            -report_el_torito as_mkisofs \
+            > boot-info.txt 2>&1
 
-          sha256sum out/iso/XOS-Alpha-amd64.iso \
-            | tee out/iso/SHA256SUMS.txt
+          ls -lh XOS-Alpha-amd64.iso
+          cat boot-info.txt
 
-          ls -lh out/iso/
+      - name: QEMU UEFI boot smoke test
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -uo pipefail
 
-      - name: Upload ISO and build log
+          if [[ -x scripts/qemu-smoke.sh ]]; then
+            bash scripts/qemu-smoke.sh \
+              out/XOS-Alpha-amd64.iso \
+              420 \
+              out/qemu 2>&1 | tee out/qemu-smoke.log
+          else
+            echo "QEMU smoke-test script is not executable or is missing."
+          fi
+
+      - name: Upload XOS ISO artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOS-Alpha-amd64-ISO
+          path: |
+            out/XOS-Alpha-amd64.iso
+            out/XOS-Alpha-amd64.iso.sha256
+            out/boot-info.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: XOS-Alpha-amd64-Build
+          name: XOS-Build-Diagnostics
           path: |
-            out/iso/
-            out/build.log
+            out/*.log
+            out/*.txt
+            out/qemu/
+            build/*.log
+            build/chroot.packages.live
           if-no-files-found: warn
           retention-days: 14
