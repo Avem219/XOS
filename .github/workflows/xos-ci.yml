@@ -1,66 +1,79 @@
-
-name: Extract XOS ZIP
+```yaml
+name: Extract XOS ZIP to Repository Root
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   extract:
-    name: Extract XOS source archive
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Install unzip
-        shell: bash
         run: |
-          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      - name: Find and extract XOS ZIP
+      - name: Extract archive into repository root
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "Searching for xos-source.zip..."
 
           ZIP_PATH="$(find . -type f -name 'xos-source.zip' \
             -not -path './.git/*' -print -quit)"
 
           if [[ -z "$ZIP_PATH" ]]; then
-            echo "::error::xos-source.zip was not found."
-            echo "Files available in repository:"
-            find . -maxdepth 3 -type f | head -200
+            echo "::error::xos-source.zip not found."
             exit 1
           fi
 
-          echo "Found archive: $ZIP_PATH"
-
-          mkdir -p extracted-xos
-
+          echo "Archive: $ZIP_PATH"
           unzip -t "$ZIP_PATH"
-          unzip -o "$ZIP_PATH" -d extracted-xos
 
-          echo "Extraction complete."
-          echo "Extracted file listing:"
-          find extracted-xos -maxdepth 5 -type f | sort | head -500
+          # Extract into the repository root.
+          # Existing files may be overwritten by matching archive paths.
+          unzip -o "$ZIP_PATH" -d .
 
-          if [[ ! -f extracted-xos/build-xos.sh ]] &&
-             [[ ! -f extracted-xos/xos-source/build-xos.sh ]]; then
-            echo "::warning::Build script was not found at the expected archive paths. Check the extracted file listing."
+          echo "Root files after extraction:"
+          ls -la
+
+          echo "Build script locations:"
+          find . -type f -name 'build-xos.sh' \
+            -not -path './.git/*' -print
+
+          if [[ ! -f build-xos.sh ]]; then
+            echo "::error::build-xos.sh is not at the repository root."
+            echo "The ZIP may contain an enclosing directory."
+            echo "Inspect the file locations above before changing paths."
+            exit 1
           fi
 
-      - name: Upload extracted XOS files
-        uses: actions/upload-artifact@v4
-        with:
-          name: xos-extracted-source
-          path: extracted-xos/
-          if-no-files-found: error
-          retention-days: 7
+      - name: Commit extracted files to repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Do not add the archive or Git metadata.
+          git add -A -- . ':!.git' ':!xos-source.zip'
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Extract XOS source into repository root"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+```
