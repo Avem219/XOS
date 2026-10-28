@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build-xos:
-    name: Build XOS Alpha for amd64
+    name: Build XOS Alpha amd64
     runs-on: ubuntu-24.04
     timeout-minutes: 360
 
@@ -21,19 +21,13 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
 
     steps:
-      - name: Install checkout and build prerequisites
+      - name: Install checkout prerequisites
         shell: bash
         run: |
           set -euo pipefail
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates \
-            git \
-            unzip \
-            python3 \
-            python3-yaml \
-            python3-pil \
-            libxml2-utils
+            ca-certificates git unzip
 
       - name: Check out committed XOS source
         uses: actions/checkout@v4
@@ -45,31 +39,32 @@ jobs:
           mkdir -p out
           {
             cat /etc/os-release
+            echo
             uname -a
             echo
             df -h /
             echo
-            nproc
-            free -m
-          } | tee out/environment.txt
+            echo "CPU cores: $(nproc)"
+            if command -v free >/dev/null 2>&1; then
+              free -m
+            elif [[ -r /proc/meminfo ]]; then
+              grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo
+            else
+              echo "Memory information unavailable."
+            fi
+          } 2>&1 | tee out/environment.txt
 
       - name: Verify source files
         shell: bash
         run: |
           set -euo pipefail
-
           test -f build-xos.sh
           test -f scripts/validate.sh
           test -d live
-          test -d live/package-lists
-          test -d live/includes.chroot
-
           chmod +x build-xos.sh scripts/validate.sh
+          echo "Required XOS source files found."
 
-          echo "XOS source files found."
-          find live -maxdepth 2 -type d | sort
-
-      - name: Install Debian Trixie ISO build tools
+      - name: Install ISO build dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -81,7 +76,6 @@ jobs:
           fi
 
           apt-get update
-
           apt-get install -y --no-install-recommends \
             live-build \
             debootstrap \
@@ -112,68 +106,51 @@ jobs:
             lb --version
             debootstrap --version
             xorriso -version
-            dpkg-query -W live-build debootstrap xorriso
           } 2>&1 | tee out/tool-versions.txt
 
-      - name: Validate XOS source and assets
+      - name: Validate source and assets
         shell: bash
         run: |
           set -euo pipefail
-
-          # Run the validator's standard checks. Do not use --packages:
-          # the previous package-availability check reported one failure.
           bash ./scripts/validate.sh 2>&1 | tee out/validate.log
 
-      - name: Adapt unsupported live-build options
+      - name: Adapt legacy live-build options
         shell: bash
         run: |
           set -euo pipefail
 
-          # The previously observed Ubuntu live-build version rejected
-          # these three options. Adapt the runner's temporary copy only.
-          # The committed build-xos.sh remains unchanged.
           python3 - <<'PY'
           from pathlib import Path
 
           path = Path("build-xos.sh")
           source = path.read_text()
-          original = source
 
-          source = source.replace(
-              "  --security true --updates true \\\n",
-              "  --security true \\\n"
-          )
-          source = source.replace(
-              '  --bootloaders "grub-efi,syslinux" \\\n',
-              ""
-          )
-          source = source.replace(
-              '  --image-name "XOS-Alpha" \\\n',
-              ""
-          )
+          replacements = [
+              ("  --security true --updates true \\\n",
+               "  --security true \\\n"),
+              ('  --bootloaders "grub-efi,syslinux" \\\n', ""),
+              ('  --image-name "XOS-Alpha" \\\n', ""),
+          ]
 
-          if source == original:
-              print("No matching legacy options found; checking installed live-build.")
-          else:
-              path.write_text(source)
-              print("Removed legacy live-build options from the runner copy.")
+          for old, new in replacements:
+              source = source.replace(old, new)
 
-          if "--updates" in source:
-              raise SystemExit("Unsupported --updates option remains.")
-          if "--bootloaders" in source:
-              raise SystemExit("Unsupported --bootloaders option remains.")
-          if "--image-name" in source:
-              raise SystemExit("Unsupported --image-name option remains.")
+          for option in ("--updates", "--bootloaders", "--image-name"):
+              if option in source:
+                  raise SystemExit(
+                      f"Unsupported live-build option remains: {option}"
+                  )
+
+          path.write_text(source)
+          print("Temporary runner copy checked.")
           PY
 
           bash -n ./build-xos.sh
 
-      - name: Build XOS bootable ISO
+      - name: Build XOS ISO
         shell: bash
         run: |
           set -euo pipefail
-
-          # build-xos.sh requires root; the container runs as root.
           bash ./build-xos.sh 2>&1 | tee out/workflow-build.log
 
       - name: Verify ISO and checksum
@@ -184,13 +161,13 @@ jobs:
           ISO="out/XOS-Alpha-amd64.iso"
           SUM="${ISO}.sha256"
 
-          if [[ ! -s "$ISO" ]]; then
-            echo "::error::Expected ISO was not generated: $ISO"
+          test -s "$ISO" || {
+            echo "::error::ISO was not created at $ISO"
             exit 1
-          fi
+          }
 
           if [[ ! -s "$SUM" ]]; then
-            echo "::error::Expected SHA-256 file was not generated: $SUM"
+            echo "::error::Checksum file not found: $SUM"
             exit 1
           fi
 
@@ -199,15 +176,14 @@ jobs:
             sha256sum -c XOS-Alpha-amd64.iso.sha256
           )
 
-          xorriso \
-            -indev "$ISO" \
+          xorriso -indev "$ISO" \
             -report_el_torito as_mkisofs \
             > out/boot-info.txt 2>&1
 
           ls -lh "$ISO" "$SUM"
           cat out/boot-info.txt
 
-      - name: Upload bootable ISO artifact
+      - name: Upload XOS ISO
         uses: actions/upload-artifact@v4
         with:
           name: XOS-Alpha-amd64-ISO
@@ -219,21 +195,19 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-      - name: Run optional QEMU boot smoke test
+      - name: Optional QEMU boot smoke test
         if: success()
         continue-on-error: true
         shell: bash
         run: |
           set -uo pipefail
-
           if [[ -f scripts/qemu-smoke.sh ]]; then
-            chmod +x scripts/qemu-smoke.sh
             bash scripts/qemu-smoke.sh \
               out/XOS-Alpha-amd64.iso \
               420 \
               out/qemu 2>&1 | tee out/qemu-smoke.log
           else
-            echo "QEMU smoke-test script not found; skipping."
+            echo "QEMU smoke-test script not found; skipped."
           fi
 
       - name: Upload diagnostic logs
@@ -245,7 +219,5 @@ jobs:
             out/*.log
             out/*.txt
             out/qemu/
-            build/*.log
-            build/chroot.packages.live
           if-no-files-found: warn
           retention-days: 14
