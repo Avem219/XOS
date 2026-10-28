@@ -21,7 +21,7 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
 
     steps:
-      - name: Install checkout and build prerequisites
+      - name: Install checkout prerequisites
         shell: bash
         run: |
           set -euo pipefail
@@ -63,10 +63,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           test -f build-xos.sh
           test -f scripts/validate.sh
           test -d live
+          test -d config/hooks/live
+
           chmod +x build-xos.sh scripts/validate.sh
+
           echo "Required XOS source files found."
 
       - name: Install ISO build dependencies
@@ -81,6 +85,7 @@ jobs:
           fi
 
           apt-get update
+
           apt-get install -y --no-install-recommends \
             live-build \
             debootstrap \
@@ -113,7 +118,7 @@ jobs:
             xorriso -version
           } 2>&1 | tee out/tool-versions.txt
 
-      - name: Validate source and assets
+      - name: Validate XOS source and assets
         shell: bash
         run: |
           set -euo pipefail
@@ -151,6 +156,42 @@ jobs:
           PY
 
           bash -n ./build-xos.sh
+
+      - name: Prepare required XOS boot splash
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET="config/xos-boot/splash.png"
+          mkdir -p config/xos-boot
+
+          if [[ -s "$TARGET" ]] && file "$TARGET" | grep -q PNG; then
+            echo "Required splash already exists."
+          else
+            SOURCE=""
+
+            for candidate in \
+              live/bootloaders/splash.png \
+              live/includes.chroot/usr/share/plymouth/themes/xos/logo.png \
+              live/includes.chroot/usr/share/plymouth/themes/xos/splash.png
+            do
+              if [[ -s "$candidate" ]] && file "$candidate" | grep -q PNG; then
+                SOURCE="$candidate"
+                break
+              fi
+            done
+
+            if [[ -z "$SOURCE" ]]; then
+              echo "::error::No existing PNG splash asset was found."
+              find live config -type f -iname '*.png' -print 2>/dev/null || true
+              exit 1
+            fi
+
+            cp "$SOURCE" "$TARGET"
+            echo "Prepared $TARGET from $SOURCE"
+          fi
+
+          file "$TARGET"
 
       - name: Build XOS ISO
         shell: bash
