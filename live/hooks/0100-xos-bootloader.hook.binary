@@ -2,9 +2,22 @@
 # Brand the boot menus. Runs from the live-build work directory after the bootloaders were populated.
 set -eu
 SRC=config/xos-boot
-APPEND="boot=live components quiet splash username=xos hostname=xos locales=en_US.UTF-8 keyboard-layouts=us"
 
-[ -f "$SRC/splash.png" ] || { echo "XOS hook: missing $SRC/splash.png" >&2; exit 1; }
+if [ ! -s "$SRC/splash.png" ] || [ ! -s "$SRC/select_c.png" ]; then
+  SRC="../live/bootloaders"
+fi
+
+[ -s "$SRC/splash.png" ] || {
+  echo "XOS hook: splash.png not found in config/xos-boot or ../live/bootloaders" >&2
+  exit 1
+}
+
+[ -s "$SRC/select_c.png" ] || {
+  echo "XOS hook: select_c.png not found in $SRC" >&2
+  exit 1
+}
+
+APPEND="boot=live components quiet splash username=xos hostname=xos locales=en_US.UTF-8 keyboard-layouts=us"
 
 # ---- GRUB (UEFI and GRUB-based boots) ----
 T=binary/boot/grub/themes/xos
