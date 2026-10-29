@@ -1,5 +1,3 @@
-#!/bin/sh
-# Brand the boot menus. Runs from the live-build work directory after the bootloaders were populated.
 set -eu
 SRC=config/xos-boot
 
