@@ -1,0 +1,118 @@
+
+name: XOS Alpha - Ubuntu Remaster
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xos-ubuntu-alpha
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Preflight and build XOS Alpha
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      ISO_NAME: ubuntu-26.04.1-desktop-amd64.iso
+      ISO_URL: https://releases.ubuntu.com/26.04.1/ubuntu-26.04.1-desktop-amd64.iso
+      ISO_SHA256: 601e30fbf5d97759367c632e2c33630665039b7e2158fd068403da3ccf1bda1f
+
+    steps:
+      - name: Check out XOS source
+        uses: actions/checkout@v4
+
+      - name: Install and verify required tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            xorriso squashfs-tools rsync curl ca-certificates \
+            python3 file
+
+          for tool in xorriso unsquashfs mksquashfs rsync curl python3 file; do
+            command -v "$tool"
+          done
+
+          echo "Available disk space before cleanup:"
+          df -h /
+
+      - name: Check repository and source assets
+        run: |
+          set -euo pipefail
+
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Commit: $GITHUB_SHA"
+
+          test -f README.md
+          test -d .github/workflows
+
+          echo "Existing XOS files:"
+          find . -maxdepth 3 -type f \
+            \( -iname '*.png' -o -iname '*.svg' \
+               -o -iname '*.list.chroot' -o -iname '*.hook.binary' \) \
+            -print
+
+          if [ -f live/bootloaders/splash.png ]; then
+            file live/bootloaders/splash.png
+          fi
+
+          if [ -f live/bootloaders/select_c.png ]; then
+            file live/bootloaders/select_c.png
+          fi
+
+      - name: Free temporary runner storage
+        run: |
+          set -euo pipefail
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android
+          sudo docker system prune -af || true
+
+          echo "Available disk space after cleanup:"
+          df -h /
+
+          AVAILABLE_KB=$(df -Pk / | awk 'NR==2 {print $4}')
+          REQUIRED_KB=$((35 * 1024 * 1024))
+
+          if [ "$AVAILABLE_KB" -lt "$REQUIRED_KB" ]; then
+            echo "::error::Insufficient disk space for a full Ubuntu ISO remaster."
+            echo "At least 35 GiB must be free before starting."
+            echo "No ISO modification or build has been attempted."
+            exit 1
+          fi
+
+      - name: Download official Ubuntu ISO
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/xos-input"
+
+          curl --fail --location --retry 3 \
+            "$ISO_URL" \
+            --output "$RUNNER_TEMP/xos-input/$ISO_NAME"
+
+          echo "$ISO_SHA256  $RUNNER_TEMP/xos-input/$ISO_NAME" \
+            | sha256sum --check
+
+          file "$RUNNER_TEMP/xos-input/$ISO_NAME"
+
+      - name: Inspect ISO boot metadata
+        run: |
+          set -euo pipefail
+          xorriso -indev "$RUNNER_TEMP/xos-input/$ISO_NAME" \
+            -report_el_torito plain
+
+          xorriso -indev "$RUNNER_TEMP/xos-input/$ISO_NAME" \
+            -find /casper -maxdepth 1 -type f -print
+
+      - name: Stop before unverified remaster
+        run: |
+          echo "::error::Preflight only: the Ubuntu remaster procedure has not yet been validated against this ISO."
+          echo "The source ISO has been downloaded and checksum-checked."
+          echo "No bootable XOS ISO is being claimed or published."
+          exit 1
