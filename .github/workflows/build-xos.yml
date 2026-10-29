@@ -94,7 +94,7 @@ jobs:
                 systemd-boot-efi
 
               echo "Installed live-build version:"
-              dpkg-query -W -f="${Version}\n" live-build
+              dpkg-query -W live-build
 
               echo "Checking build environment:"
               command -v lb
