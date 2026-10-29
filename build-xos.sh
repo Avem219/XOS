@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 # XOS Alpha - Debian Trixie amd64 live ISO builder
 set -Eeuo pipefail
