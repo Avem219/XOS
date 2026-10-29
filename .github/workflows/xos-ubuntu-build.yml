@@ -102,6 +102,7 @@ jobs:
           file "$RUNNER_TEMP/xos-input/$ISO_NAME"
 
       
+      
       - name: Inspect ISO boot metadata
         run: |
           set -euo pipefail
@@ -110,13 +111,19 @@ jobs:
           echo "Checking BIOS and UEFI boot metadata..."
           xorriso -indev "$ISO" -report_el_torito plain
 
-          echo "Checking for the Ubuntu live filesystem..."
+          echo "Listing Ubuntu live filesystem files..."
           xorriso -indev "$ISO" -ls /casper
 
-          echo "Checking for the compressed live filesystem..."
-          xorriso -indev "$ISO" -find /casper -type f -name 'filesystem.squashfs'
+          echo "Checking for filesystem.squashfs..."
+          if xorriso -indev "$ISO" -ls /casper | grep -q 'filesystem.squashfs'; then
+            echo "Found filesystem.squashfs"
+          else
+            echo "::error::filesystem.squashfs was not listed in /casper."
+            exit 1
+          fi
 
           echo "ISO inspection completed."
+
 
       - name: Stop before unverified remaster
         run: |
