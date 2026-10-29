@@ -1,4 +1,5 @@
-name: Extract XOS ZIP
+
+name: Build XOS Alpha
 
 on:
   workflow_dispatch:
@@ -6,47 +7,149 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: xos-alpha-build
+  cancel-in-progress: false
+
 jobs:
-  extract:
-    name: Extract XOS source archive
+  build:
+    name: Build Debian Trixie ISO
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 360
 
     steps:
-      - name: Checkout repository
+      - name: Check out XOS source
         uses: actions/checkout@v4
 
-      - name: Find and extract XOS ZIP
+      - name: Check source and runner
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for xos-source.zip..."
+          echo "Commit: $GITHUB_SHA"
+          echo "Runner disk space:"
+          df -h /
 
-          ZIP_PATH="$(find . -type f -name 'xos-source.zip' -print -quit)"
+          test -s README.md
+          test -s build-xos.sh
+          test -s scripts/validate.sh
+          test -s live/package-lists/xos.list.chroot
+          test -s live/bootloaders/splash.png
+          test -s live/bootloaders/select_c.png
 
-          if [ -z "$ZIP_PATH" ]; then
-            echo "::error::xos-source.zip was not found in the repository."
-            echo "Files available in repository:"
-            find . -maxdepth 3 -type f | head -200
+          echo "Required source files are present."
+          bash -n build-xos.sh
+          bash -n scripts/validate.sh
+
+      - name: Check available build space
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AVAILABLE_KB=$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')
+          echo "Available space: $((AVAILABLE_KB / 1024 / 1024)) GiB"
+
+          if [ "$AVAILABLE_KB" -lt $((12 * 1024 * 1024)) ]; then
+            echo "::error::Less than 12 GiB available. Stopping before the build."
             exit 1
           fi
 
-          echo "Found archive: $ZIP_PATH"
+      - name: Build XOS inside Debian Trixie
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          mkdir -p extracted-xos
+          docker run --rm --privileged \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/src" \
+            --workdir /src \
+            debian:trixie-slim \
+            bash -Eeuo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
 
-          unzip -t "$ZIP_PATH"
-          unzip -o "$ZIP_PATH" -d extracted-xos
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                live-build \
+                debootstrap \
+                ca-certificates \
+                xorriso \
+                squashfs-tools \
+                rsync \
+                procps \
+                file \
+                findutils \
+                coreutils \
+                util-linux \
+                bash \
+                dpkg-dev \
+                apt-utils \
+                cpio \
+                dosfstools \
+                mtools \
+                grub-pc-bin \
+                grub-efi-amd64-bin \
+                grub-efi-amd64-signed \
+                shim-signed \
+                syslinux-common \
+                isolinux \
+                systemd-boot-efi
 
-          echo "Extraction complete."
-          echo "Extracted file listing:"
-          find extracted-xos -maxdepth 4 -type f | sort | head -500
+              echo "Installed live-build version:"
+              dpkg-query -W -f="${Version}\n" live-build
 
-      - name: Upload extracted XOS files
+              echo "Checking build environment:"
+              command -v lb
+              command -v debootstrap
+              df -h /src
+
+              bash /src/build-xos.sh
+            '
+
+      - name: Verify ISO and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ISO="out/XOS-Alpha-amd64.iso"
+          CHECKSUM="$ISO.sha256"
+
+          test -s "$ISO"
+          test -s "$CHECKSUM"
+
+          (
+            cd out
+            sha256sum --check XOS-Alpha-amd64.iso.sha256
+          )
+
+          echo "ISO file details:"
+          ls -lh "$ISO" "$CHECKSUM"
+          file "$ISO"
+
+      - name: Inspect generated ISO boot metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          xorriso -indev out/XOS-Alpha-amd64.iso \
+            -report_el_torito plain
+
+      - name: Upload XOS Alpha ISO
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: xos-extracted-source
-          path: extracted-xos/
+          name: XOS-Alpha-amd64
+          path: |
+            out/XOS-Alpha-amd64.iso
+            out/XOS-Alpha-amd64.iso.sha256
+            out/build.log
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: XOS-build-failure-log
+          path: out/build.log
+          if-no-files-found: ignore
           retention-days: 7
